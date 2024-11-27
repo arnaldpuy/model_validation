@@ -1,17 +1,17 @@
-
-## ----setup, include=FALSE, warning=FALSE-----------------------------------------------------------
+## ----setup, include=FALSE, warning=FALSE----------------------------------------------
 knitr::opts_chunk$set(echo = TRUE, dev = "tikz", cache = TRUE)
 
 
-## ----preliminary-----------------------------------------------------------------------------------
+## ----preliminary, warning=FALSE-------------------------------------------------------
 
 # PRELIMINARY FUNCTIONS ########################################################
 
 # Load the packages
 sensobol::load_packages(c("data.table", "tidyverse", "openxlsx", "tm", "stringr", 
-                          "pdftools", "tidytext", "scales", "cowplot", "lsa", 
-                          "LSAfun", "ggrepel", "tidyquant"))
+                          "pdftools", "tidytext", "scales", "cowplot",
+                          "ggrepel", "tidyquant"))
 
+# Create custom theme
 # Create custom theme
 theme_AP <- function() {
   theme_bw() +
@@ -23,16 +23,21 @@ theme_AP <- function() {
           legend.margin = margin(0.5, 0.1, 0.1, 0.1),
           legend.box.margin = margin(0.2,-4,-7,-7), 
           plot.margin = margin(3, 4, 0, 4), 
-          legend.text = element_text(size = 8), 
+          legend.text = element_text(size = 6.5), 
           axis.title = element_text(size = 10),
-          legend.key.width = unit(0.2, "cm"), 
-          legend.key.height = unit(0.2, "cm"), 
-          legend.title = element_text(size = 9)) 
+          axis.text.x = element_text(size = 7),
+          axis.text.y = element_text(size = 7),
+          axis.title.x = element_text(size = 7.3),
+          axis.title.y = element_text(size = 7.3),
+          strip.text.x = element_text(size = 7.4),
+          strip.text.y = element_text(size = 7.4),
+          legend.key.width = unit(0.4, "cm"), 
+          legend.key.height = unit(0.5, "lines"), 
+          legend.title = element_text(size = 7.5)) 
 }
 
 
-
-## ----tests-----------------------------------------------------------------------------------------
+## ----tests----------------------------------------------------------------------------
 
 # FUNCTIONS TO CLEAN THE TEXT ##################################################
 
@@ -110,8 +115,6 @@ valid.dt <- lapply(out, function(x) rowSums(x, na.rm = TRUE) > 0L) %>%
 full.dt <- cbind(dt, valid.dt)
 full.dt.cols <- data.frame(full.dt[, .SD, .SDcols = keywords.stemmed])
 
-full.dt[any.column == TRUE]
-
 # DESCRIPTIVE STATISTICS #######################################################
 
 full.dt[, lapply(.SD, sum), .SDcols = keywords.stemmed]
@@ -144,9 +147,27 @@ for (size in 2:length(keywords.stemmed)) {
 comb_dt <- rbindlist(results_list)
 
 
-## ----plots_descriptive, dependson="tests", warning=FALSE-------------------------------------------
+## ----plots_descriptive, dependson="tests", warning=FALSE------------------------------
 
 # PLOTS ########################################################################
+
+plot.year <- full.dt[, .N, year] %>%
+  .[!year == 2023] %>%
+  ggplot(., aes(year, N)) +
+  geom_line() +
+  labs(x = "Year", y = "Nº papers") +
+  theme_AP()
+
+plot.year
+
+plot.model.year <- full.dt[, .N, .(Model, year)] %>%
+  .[!year == 2023] %>%
+  ggplot(., aes(year, N, color = Model)) +
+  geom_ma(ma_fun = SMA, n = 3, lty = 1) +
+  labs(x = "Year", y = "") +
+  theme_AP() 
+
+plot.model.year
 
 plot.keywords.time <- merge(full.dt, full.dt[, .(total.papers = .N), year], by = "year") %>%
   melt(., measure.vars = keywords.stemmed) %>%
@@ -156,23 +177,27 @@ plot.keywords.time <- merge(full.dt, full.dt[, .(total.papers = .N), year], by =
   scale_color_discrete(name = "") +
   geom_ma(ma_fun = SMA, n = 5, lty = 1) +
   theme_AP() +
-  theme(legend.position = c(0.23, 0.85)) +
   labs(x = "Year", y = "Fraction papers")
 
 plot.keywords.time
 
-plot.keyword.per.model <- merge(full.dt, full.dt[, .(total.papers = .N), Model], by = "Model") %>%
+tmp <- merge(full.dt, full.dt[, .(total.papers = .N), Model], by = "Model") %>%
   melt(., measure.vars = keywords.stemmed) %>%
   .[, sum(value, na.rm = TRUE), .(variable, Model, total.papers)] %>%
   .[, fraction:= V1 / total.papers] %>%
-  ggplot(., aes(Model, fraction)) +
-  geom_bar(stat = "identity", position = position_dodge(2)) +
+  mutate(variable = as.factor(variable),
+       name = reorder_within(Model, fraction, variable))
+
+plot.keyword.per.model <- tmp %>%
+  ggplot(., aes(name, fraction)) +
+  geom_bar(stat = "identity") +
   coord_flip() + 
-  facet_wrap(~variable, ncol = 6) + 
+  facet_wrap(~variable, scales = "free") + 
+  scale_x_reordered() +
   scale_y_continuous(breaks = pretty_breaks(n = 3)) +
   theme_AP() +
   labs(x = "", y = "Fraction papers") + 
-  theme(axis.text.y = element_text(size = 7))
+  theme(axis.text.y = element_text(size = 6.5))
 
 plot.keyword.per.model
 
@@ -187,7 +212,13 @@ plot.keyword.comb <- comb_dt[N > 10] %>%
 plot.keyword.comb 
 
 
-## ----merge_plots_descriptive, dependson="plots_descriptive", fig.width=5.5, warning=FALSE----------
+## ----plot.time, dependson="plots_descriptive", fig.height=2.5, fig.width=3------------
+
+plot.keywords.time
+
+
+
+## ----merge_plots_descriptive, dependson="plots_descriptive", fig.width=5.5, fig.height = 6, warning=FALSE, dev="pdf"----
 
 # MERGE DESCRIPTIVE PLOTS #####################################################
 
@@ -195,15 +226,36 @@ top <- plot_grid(plot.keywords.time, plot.keyword.comb, ncol = 2, labels = "auto
                  rel_widths = c(0.45, 0.55))
 
 plot.merged <- plot_grid(top, plot.keyword.per.model, ncol = 1, 
-                         labels = c("", "c"), rel_heights = c(0.45, 0.55))
+                         labels = c("", "c"), rel_heights = c(0.3, 0.7))
 
 plot.merged
 
 
 
-## ----token_function--------------------------------------------------------------------------------
+## ----merge_plots_descriptive2, dependson="plots_descriptive", fig.width=5.5, fig.height = 8.5, warning=FALSE, dev="pdf"----
 
-# TOKEN ANALYSIS ###############################################################
+toppest <- plot_grid(plot.year, plot.model.year, ncol = 2, labels = "auto", 
+                     rel_widths = c(0.4, 0.6))
+
+top <- plot_grid(plot.keywords.time, plot.keyword.comb, ncol = 2, labels = "auto", 
+                 rel_widths = c(0.45, 0.55))
+
+both.top <- plot_grid(toppest, top, ncol = 1, rel_heights = c(0.4, 0.6))
+
+plot.merged <- plot_grid(both.top, plot.keyword.per.model, ncol = 1, 
+                         labels = c("", "c"), rel_heights = c(0.4, 0.6))
+
+plot.merged
+
+
+## ----plot.years, dependson="plots_descriptive", fig.height=2.35, fig.width=5.5, dev="pdf"----
+
+toppest
+
+
+## ----token_function-------------------------------------------------------------------
+
+# TOKEN ANALYSIS ################################################################
 
 # Create function --------------------------------------------------------------
 tokenize_fun <- function(dt, word, keywords, N.tokens) {
@@ -241,10 +293,10 @@ tokenize_fun <- function(dt, word, keywords, N.tokens) {
     coord_flip() +
     scale_y_continuous(breaks = pretty_breaks(n = 3)) +
     theme_AP() +
-    labs(y = "$n$", x = "") +
+    labs(y = "n", x = "") +
     ggtitle(word) +
     theme(legend.position = "none", 
-          plot.title = element_text(size = 11), 
+          plot.title = element_text(size = 9), 
           axis.text.y = element_text(size = 7))
   
   # Arrange and output --------------------------
@@ -257,7 +309,7 @@ tokenize_fun <- function(dt, word, keywords, N.tokens) {
 }
 
 
-## ----token_analysis, dependson=c("token_function", "tests")----------------------------------------
+## ----token_analysis, dependson=c("token_function", "tests")---------------------------
 
 # RUN TOKEN ANALYSIS ###########################################################
 
@@ -273,7 +325,7 @@ for (j in keywords.stemmed) {
 }
 
 
-## ----plot_merged_token, dependson=c("token_analysis", "merge_plots_descriptive"), fig.height=8, warning=FALSE, fig.width=6----
+## ----plot_merged_token, dependson=c("token_analysis", "merge_plots_descriptive"), fig.height=8, warning=FALSE, fig.width=6, dev="pdf"----
 
 # PLOT RESULTS #################################################################
 
@@ -281,8 +333,28 @@ plot.tokens <- plot_grid(token.dt$valid[[2]], token.dt$verif[[2]], token.dt$cali
                          token.dt$confirm[[2]], token.dt$evalu[[2]], token.dt$benchmark[[2]], 
                          ncol = 3)
 
-plot.tokens
-
 plot_grid(plot.merged, plot.tokens, ncol = 1, labels = c("", "d"), 
           rel_heights = c(0.57, 0.43))
+
+
+
+## ----plot_tokens, dependson="plot_merged_token", fig.height=3.5, fig.width=6, dev="pdf"----
+
+plot.tokens
+
+
+## ----microbenchmark-------------------------------------------------------------------
+
+# SESSION INFORMATION ##########################################################
+
+sessionInfo()
+
+## Return the machine CPU
+cat("Machine:     "); print(get_cpu()$model_name)
+
+## Return number of true cores
+cat("Num cores:   "); print(detectCores(logical = FALSE))
+
+## Return number of threads
+cat("Num threads: "); print(detectCores(logical = FALSE))
 
