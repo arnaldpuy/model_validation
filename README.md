@@ -29,6 +29,8 @@ This repository contains the data and files produced in this study.
 
 The files below are necessary to replicate our study. 
 
+* `validation_work_students.xlsx`
+* `dt.papers.close.reading.xlsx`
 
 We offer the code in `.R`, `.pdf` and `.Rmd`. Our entire workflow can be run and the 
 results replicated from either of these files. The user must run the code from the 
