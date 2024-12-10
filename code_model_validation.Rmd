@@ -1,5 +1,5 @@
 ---
-title: "Validation, calibration, etc"
+title: "Turbulent code in water models"
 subtitle: "R code"
 author: "Arnald Puy"
 header-includes:
@@ -39,7 +39,7 @@ knitr::opts_chunk$set(echo = TRUE, dev = "tikz", cache = TRUE)
 # Load the packages
 sensobol::load_packages(c("data.table", "tidyverse", "openxlsx", "tm", "stringr", 
                           "pdftools", "tidytext", "scales", "cowplot",
-                          "ggrepel", "tidyquant"))
+                          "ggrepel", "tidyquant", "text2vec"))
 
 # Create custom theme
 # Create custom theme
@@ -53,7 +53,7 @@ theme_AP <- function() {
           legend.margin = margin(0.5, 0.1, 0.1, 0.1),
           legend.box.margin = margin(0.2,-4,-7,-7), 
           plot.margin = margin(3, 4, 0, 4), 
-          legend.text = element_text(size = 6.5), 
+          legend.text = element_text(size = 6), 
           axis.title = element_text(size = 10),
           axis.text.x = element_text(size = 7),
           axis.text.y = element_text(size = 7),
@@ -207,6 +207,7 @@ plot.keywords.time <- merge(full.dt, full.dt[, .(total.papers = .N), year], by =
   scale_color_discrete(name = "") +
   geom_ma(ma_fun = SMA, n = 5, lty = 1) +
   theme_AP() +
+  theme(legend.position = c(0.2, 0.8)) +
   labs(x = "Year", y = "Fraction papers")
 
 plot.keywords.time
@@ -240,6 +241,30 @@ plot.keyword.comb <- comb_dt[N > 10] %>%
   labs(x = "", y = "Nº papers")
 
 plot.keyword.comb 
+
+total.papers.model <- full.dt[, .N, Model]
+
+plot.valid.calibr <- tmp %>%
+  dcast(., Model ~ variable, value.var = "fraction") %>%
+  merge(., total.papers.model, by = "Model") %>%
+  ggplot(., aes(valid, calibr, label = Model)) +
+  geom_point(color = "grey") +
+  geom_text_repel(size = 1.5) + 
+  theme_AP() + 
+  theme(legend.position = "none")
+
+plot.valid.calibr
+
+plot.evalu.valid <- tmp %>%
+  dcast(., Model ~ variable, value.var = "fraction") %>%
+  merge(., total.papers.model, by = "Model") %>%
+  ggplot(., aes(evalu, valid, label = Model)) +
+  geom_point(color = "grey") +
+  geom_text_repel(size = 1.5) + 
+  theme_AP() + 
+  theme(legend.position = "right")
+
+plot.evalu.valid
 ```
 
 ```{r plot.time, dependson="plots_descriptive", fig.height=2.5, fig.width=3}
@@ -247,6 +272,7 @@ plot.keyword.comb
 plot.keywords.time
 
 ```
+
 
 ```{r merge_plots_descriptive, dependson="plots_descriptive", fig.width=5.5, fig.height = 6, warning=FALSE, dev="pdf"}
 
@@ -281,6 +307,14 @@ plot.merged
 ```{r plot.years, dependson="plots_descriptive", fig.height=2.35, fig.width=5.5, dev="pdf"}
 
 toppest
+```
+
+```{r scatter.plots, dependson=c("merge_plots_descriptive", "plots_descriptive"), fig.height=4, fig.width=5.5, dev="pdf"}
+
+scatter.plots <- plot_grid(plot.valid.calibr, plot.evalu.valid, ncol = 2, 
+                           labels = c("c", "d"), rel_widths = c(0.46, 0.54))
+
+plot_grid(top, scatter.plots, ncol = 1, rel_heights = c(0.5, 0.5))
 ```
 
 ```{r token_function}
@@ -371,6 +405,160 @@ plot_grid(plot.merged, plot.tokens, ncol = 1, labels = c("", "d"),
 ```{r plot_tokens, dependson="plot_merged_token", fig.height=3.5, fig.width=6, dev="pdf"}
 
 plot.tokens
+```
+
+# Close reading
+
+```{r close_reading, dev = "pdf"}
+
+# KEYWORDS TO LOOK FOR #########################################################
+
+keywords_selected <- c(
+  "benchmark", "calibrate", "confirm", "evaluate", "validate", "verify",
+  "benchmarks", "calibrates", "confirms", "evaluates", "validates", "verifies",
+  "benchmarked", "calibrated", "confirmed", "evaluated", "validated", "verified",
+  "benchmarking", "calibrating", "confirming", "evaluating", "validating", "verifying",
+  "calibration", "confirmation", "evaluation", "validation", "verification",
+  "calibrations", "confirmations", "evaluations", "validations", "verifications",
+  "benchmarkable", "calibrative", "confirmative", "evaluative", "validative", "verificative",
+  "calibratively", "confirmatively", "evaluatively", "validatively", "verificatively"
+)
+
+keywords_selected_stemmed <- unique(stemDocument(keywords_selected))[-c(1, 3, 6)]
+
+# READ IN DATA #################################################################
+
+list.close.reading <- data.table(read.xlsx("dt.papers.close.reading.xlsx"))
+
+dt.students <- data.table(read.xlsx("validation_work_students.xlsx")) %>%
+  .[, title.large:= tolower(title)]
+
+dt.close.reading <- merge(list.close.reading[, .(Model, title.large)], 
+      dt.students[, .(doi, title.large, paragraph)], by = "title.large") %>%
+  .[, title.large:= tolower(title.large)] %>%
+  .[, paragraph.clean:= clear_text(paragraph)]
+
+total.models <- dt.close.reading[, .N, .(Model, title.large)] %>%
+  .[, .(Model)] %>%
+  .[, .(total.papers = .N), Model]
+
+# COUNT KEYWORDS ###############################################################
+
+out <- out.stemmed <- list()
+
+for(i in 1:length(keywords_selected)) {
+
+  pattern <- paste0("\\b", keywords_selected[i], "\\b")
+  
+  out[[i]] <- dt.close.reading[, lapply(.SD, function(x) 
+    str_count(x, pattern)), .SDcols = "paragraph"]
+  
+}
+
+for(i in 1:length(keywords_selected_stemmed)) {
+
+  
+  out.stemmed[[i]] <- dt.close.reading[, lapply(.SD, function(x) 
+    str_count(x, keywords_selected_stemmed[i])), .SDcols = "paragraph"]
+  
+}
+
+# ARRANGE DATA #################################################################
+
+dt.keywords <- do.call(cbind, out) %>%
+  data.table() 
+
+dt.keywords.stemmed <- do.call(cbind, out.stemmed) %>%
+  data.table() 
+
+colnames(dt.keywords) <- keywords_selected
+colnames(dt.keywords.stemmed) <- keywords_selected_stemmed
+
+full.dt.keywords <- cbind(dt.keywords, dt.keywords.stemmed)
+
+vec.columns <- colSums(full.dt.keywords, na.rm = TRUE)
+
+colnames.keywords <- names(vec.columns[!vec.columns == 0])
+
+full.dt.close.reading <- cbind(dt.close.reading, full.dt.keywords) %>%
+  merge(., total.models, by = "Model")
+
+
+# COSINE ANALYSIS ##############################################################
+
+clean_text <- melt(full.dt.close.reading, 
+                   measure.vars = keywords.stemmed) %>%
+  .[!value == 0] %>%
+  unnest_tokens(word, paragraph.clean) %>%
+  anti_join(stop_words) %>%
+  group_by(variable) %>%
+  summarize(paragraph.clean = paste(word, collapse = " "))
+
+
+# Iterate over the text --------------------------------------------------------
+
+it <- itoken(clean_text$paragraph.clean, progressbar = FALSE)
+
+# Create vocabulary ------------------------------------------------------------
+
+vocab <- create_vocabulary(it)
+
+# Vectorize text ---------------------------------------------------------------
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer)
+
+# Apply TF-IDF transformation --------------------------------------------------
+
+tfidf <- TfIdf$new()
+dtm_tfidf <- tfidf$fit_transform(dtm)
+
+# Compute cosine similarity matrix ---------------------------------------------
+
+similarity_matrix <- sim2(dtm_tfidf, method = "cosine", norm = "l2")
+
+# Convert the similarity matrix into a tidy format_-----------------------------
+
+similarity_df <- as.data.frame(as.table(as.matrix(similarity_matrix)))
+colnames(similarity_df) <- c("Paragraph1", "Paragraph2", "Similarity")
+
+# Filter for term-specific comparisons if needed -------------------------------
+
+similarity_df <- similarity_df %>%
+  filter(Paragraph1 != Paragraph2) %>%
+  arrange(desc(Similarity))
+
+# PLOT #########################################################################
+
+heatmap_data <- similarity_matrix
+rownames(heatmap_data) <- clean_text$variable
+colnames(heatmap_data) <- clean_text$variable
+```
+
+```{r plot.heatmap, dependson="close_reading", fig.height=2.5, fig.width=2.5, dev="pdf"}
+
+
+plot.heatmap <- pheatmap::pheatmap(as.matrix(heatmap_data), 
+              color = colorRampPalette(c("white", "blue"))(50), 
+              fontsize_row = 6, 
+              fontsize_col = 6, 
+              treeheight_row = 10,  
+              treeheight_col = 10, 
+              legend = FALSE)
+
+
+plot.heatmap
+
+grob <- plot.heatmap$gtable
+```
+
+
+```{r merge.plots.heatmap, dependson=c("merge_plots_descriptive", "plots_descriptive", "plot.heatmap"), fig.height=3.7, fig.width=5.5, dev="pdf"}
+
+scatter.plots <- plot_grid(ggdraw(grob), plot.valid.calibr, plot.evalu.valid, ncol = 3, 
+                           labels = c("c", "d", "e"), rel_widths = c(0.33, 0.33, 0.33))
+
+plot_grid(top, scatter.plots, ncol = 1, rel_heights = c(0.5, 0.5))
 ```
 
 \newpage

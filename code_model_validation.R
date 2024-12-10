@@ -23,7 +23,7 @@ theme_AP <- function() {
           legend.margin = margin(0.5, 0.1, 0.1, 0.1),
           legend.box.margin = margin(0.2,-4,-7,-7), 
           plot.margin = margin(3, 4, 0, 4), 
-          legend.text = element_text(size = 6.5), 
+          legend.text = element_text(size = 6), 
           axis.title = element_text(size = 10),
           axis.text.x = element_text(size = 7),
           axis.text.y = element_text(size = 7),
@@ -177,6 +177,7 @@ plot.keywords.time <- merge(full.dt, full.dt[, .(total.papers = .N), year], by =
   scale_color_discrete(name = "") +
   geom_ma(ma_fun = SMA, n = 5, lty = 1) +
   theme_AP() +
+  theme(legend.position = c(0.3, 0.8)) +
   labs(x = "Year", y = "Fraction papers")
 
 plot.keywords.time
@@ -212,6 +213,31 @@ plot.keyword.comb <- comb_dt[N > 10] %>%
 plot.keyword.comb 
 
 
+total.papers.model <- full.dt[, .N, Model]
+
+plot.valid.calibr <- tmp %>%
+  dcast(., Model ~ variable, value.var = "fraction") %>%
+  merge(., total.papers.model, by = "Model") %>%
+  ggplot(., aes(valid, calibr, label = Model, size = N)) +
+  geom_point(color = "grey") +
+  geom_text_repel(size = 2) + 
+  theme_AP() + 
+  theme(legend.position = c(0.9, 0.4))
+
+plot.valid.calibr
+
+plot.evalu.valid <- tmp %>%
+  dcast(., Model ~ variable, value.var = "fraction") %>%
+  merge(., total.papers.model, by = "Model") %>%
+  ggplot(., aes(evalu, valid, label = Model, size = N)) +
+  geom_point(color = "grey") +
+  geom_text_repel(size = 2) + 
+  theme_AP() + 
+  theme(legend.position = c(0.9, 0.4))
+
+plot.evalu.valid
+  
+
 ## ----plot.time, dependson="plots_descriptive", fig.height=2.5, fig.width=3------------
 
 plot.keywords.time
@@ -229,6 +255,12 @@ plot.merged <- plot_grid(top, plot.keyword.per.model, ncol = 1,
                          labels = c("", "c"), rel_heights = c(0.3, 0.7))
 
 plot.merged
+
+
+scatter.plots <- plot_grid(plot.valid.calibr, plot.evalu.valid, ncol = 2, 
+                           labels = c("c", "d"))
+
+plot_grid(top, scatter.plots, ncol = 1)
 
 
 
@@ -343,6 +375,118 @@ plot_grid(plot.merged, plot.tokens, ncol = 1, labels = c("", "d"),
 plot.tokens
 
 
+
+
+
+
+library(tidytext)
+library(dplyr)
+
+# Load your dataset
+data <- read.xlsx("validation_work_students.xlsx")# Replace with your file path
+
+
+# READ CLOSE READING DATA ######################################################
+
+clean_text <- melt(full.dt.close.reading, 
+                   measure.vars = keywords.stemmed) %>%
+  .[!value == 0] %>%
+  mutate(clean_paragraph = clear_text(paragraph)) %>%
+  unnest_tokens(word, clean_paragraph) %>%
+  anti_join(stop_words) %>%
+  group_by(variable) %>%
+  summarize(clean_paragraph = paste(word, collapse = " "))
+
+
+# Iterate over the text --------------------------------------------------------
+
+it <- itoken(clean_text$clean_paragraph, progressbar = FALSE)
+
+# Create vocabulary ------------------------------------------------------------
+
+vocab <- create_vocabulary(it)
+
+# Vectorize text ---------------------------------------------------------------
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer)
+
+# Apply TF-IDF transformation --------------------------------------------------
+
+tfidf <- TfIdf$new()
+dtm_tfidf <- tfidf$fit_transform(dtm)
+
+# Compute cosine similarity matrix ---------------------------------------------
+
+similarity_matrix <- sim2(dtm_tfidf, method = "cosine", norm = "l2")
+
+# Convert the similarity matrix into a tidy format_-----------------------------
+
+similarity_df <- as.data.frame(as.table(as.matrix(similarity_matrix)))
+colnames(similarity_df) <- c("Paragraph1", "Paragraph2", "Similarity")
+
+# Filter for term-specific comparisons if needed -------------------------------
+
+similarity_df <- similarity_df %>%
+  filter(Paragraph1 != Paragraph2) %>%
+  arrange(desc(Similarity))
+
+# PLOT #########################################################################
+
+heatmap_data <- similarity_matrix
+rownames(heatmap_data) <- clean_text$variable
+colnames(heatmap_data) <- clean_text$variable
+
+heatmap(as.matrix(heatmap_data), col = colorRampPalette(c("white", "blue"))(50)) 
+
+
+
+
+
+
+library(spacyr)
+
+# Initialize spaCy
+# spacy_install() # Only required once
+spacy_initialize()
+
+text_data <- full.dt.close.reading$paragraph
+
+# Perform POS tagging
+pos_results <- spacy_parse(text_data)
+
+# View the results
+head(pos_results)
+
+keywords_selected <- c(
+  "calibration", "verification", "validation", "evaluation",
+  "calibrations", "verifications", "validations", "evaluations",  
+  "calibrated", "verified", "validated", "evaluated",             
+  "calibrating", "verifying", "validating", "evaluating",        
+  "calibrative", "verificative", "validative", "evaluative",    
+  "calibratively", "verificatively", "validatively", "evaluatively")
+  
+# Filter for specific terms
+filtered_pos <- pos_results %>%
+  filter(token %in% c("calibrated", "evaluated", "validated", "verified", 
+                      "calibration", "evaluation", "validation", "verification"))
+
+# Summarize usage by POS tag
+term_pos_summary <- filtered_pos %>%
+  group_by(token, pos) %>%
+  summarize(count = n()) %>%
+  arrange(desc(count))
+
+# View the summary
+print(term_pos_summary)
+
+ggplot(term_pos_summary, aes(x = token, y = count, fill = pos)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "POS Distribution of Key Terms",
+       x = "Term", y = "Count") +
+  theme_minimal()
+
+
 ## ----microbenchmark-------------------------------------------------------------------
 
 # SESSION INFORMATION ##########################################################
@@ -358,3 +502,184 @@ cat("Num cores:   "); print(detectCores(logical = FALSE))
 ## Return number of threads
 cat("Num threads: "); print(detectCores(logical = FALSE))
 
+################################################################################
+
+# KEYWORDS TO LOOK FOR #########################################################
+
+keywords_selected <- c(
+  "benchmark", "calibrate", "confirm", "evaluate", "validate", "verify",
+  "benchmarks", "calibrates", "confirms", "evaluates", "validates", "verifies",
+  "benchmarked", "calibrated", "confirmed", "evaluated", "validated", "verified",
+  "benchmarking", "calibrating", "confirming", "evaluating", "validating", "verifying",
+  "calibration", "confirmation", "evaluation", "validation", "verification",
+  "calibrations", "confirmations", "evaluations", "validations", "verifications",
+  "benchmarkable", "calibrative", "confirmative", "evaluative", "validative", "verificative",
+  "calibratively", "confirmatively", "evaluatively", "validatively", "verificatively"
+)
+
+keywords_selected_stemmed <- unique(stemDocument(keywords_selected))[-c(1, 3, 6)]
+
+# READ IN DATA #################################################################
+
+list.close.reading <- data.table(read.xlsx("dt.papers.close.reading.xlsx"))
+
+dt.students <- data.table(read.xlsx("validation_work_students.xlsx")) %>%
+  .[, title.large:= tolower(title)]
+
+dt.close.reading <- merge(list.close.reading[, .(Model, title.large)], 
+      dt.students[, .(doi, title.large, paragraph)], by = "title.large") %>%
+  .[, title.large:= tolower(title.large)] %>%
+  .[, paragraph.clean:= clear_text(paragraph)]
+
+total.models <- dt.close.reading[, .N, .(Model, title.large)] %>%
+  .[, .(Model)] %>%
+  .[, .(total.papers = .N), Model]
+
+# COUNT KEYWORDS ###############################################################
+
+out <- out.stemmed <- list()
+
+for(i in 1:length(keywords_selected)) {
+
+  pattern <- paste0("\\b", keywords_selected[i], "\\b")
+  
+  out[[i]] <- dt.close.reading[, lapply(.SD, function(x) 
+    str_count(x, pattern)), .SDcols = "paragraph"]
+  
+}
+
+for(i in 1:length(keywords_selected_stemmed)) {
+
+  
+  out.stemmed[[i]] <- dt.close.reading[, lapply(.SD, function(x) 
+    str_count(x, keywords_selected_stemmed[i])), .SDcols = "paragraph"]
+  
+}
+
+# ARRANGE DATA #################################################################
+
+dt.keywords <- do.call(cbind, out) %>%
+  data.table() 
+
+dt.keywords.stemmed <- do.call(cbind, out.stemmed) %>%
+  data.table() 
+
+colnames(dt.keywords) <- keywords_selected
+colnames(dt.keywords.stemmed) <- keywords_selected_stemmed
+
+full.dt.keywords <- cbind(dt.keywords, dt.keywords.stemmed)
+
+vec.columns <- colSums(full.dt.keywords, na.rm = TRUE)
+
+colnames.keywords <- names(vec.columns[!vec.columns == 0])
+
+full.dt.close.reading <- cbind(dt.close.reading, full.dt.keywords) %>%
+  merge(., total.models, by = "Model")
+
+
+# COSINE ANALYSIS ##############################################################
+
+clean_text <- melt(full.dt.close.reading, 
+                   measure.vars = keywords.stemmed) %>%
+  .[!value == 0] %>%
+  unnest_tokens(word, paragraph.clean) %>%
+  anti_join(stop_words) %>%
+  group_by(variable) %>%
+  summarize(paragraph.clean = paste(word, collapse = " "))
+
+
+# Iterate over the text --------------------------------------------------------
+
+it <- itoken(clean_text$paragraph.clean, progressbar = FALSE)
+
+# Create vocabulary ------------------------------------------------------------
+
+vocab <- create_vocabulary(it)
+
+# Vectorize text ---------------------------------------------------------------
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm <- create_dtm(it, vectorizer)
+
+# Apply TF-IDF transformation --------------------------------------------------
+
+tfidf <- TfIdf$new()
+dtm_tfidf <- tfidf$fit_transform(dtm)
+
+# Compute cosine similarity matrix ---------------------------------------------
+
+similarity_matrix <- sim2(dtm_tfidf, method = "cosine", norm = "l2")
+
+# Convert the similarity matrix into a tidy format_-----------------------------
+
+similarity_df <- as.data.frame(as.table(as.matrix(similarity_matrix)))
+colnames(similarity_df) <- c("Paragraph1", "Paragraph2", "Similarity")
+
+# Filter for term-specific comparisons if needed -------------------------------
+
+similarity_df <- similarity_df %>%
+  filter(Paragraph1 != Paragraph2) %>%
+  arrange(desc(Similarity))
+
+# PLOT #########################################################################
+
+heatmap_data <- similarity_matrix
+rownames(heatmap_data) <- clean_text$variable
+colnames(heatmap_data) <- clean_text$variable
+
+heatmap(as.matrix(heatmap_data), col = colorRampPalette(c("white", "blue"))(50)) 
+
+
+
+
+
+
+
+
+
+
+full.dt.close.reading %>%
+  melt(., measure.vars = c(keywords_selected, keywords_selected_stemmed)) %>%
+  .[, sum(value, na.rm = TRUE), .(Model, variable)] %>%
+  merge(., total.models, by = "Model") %>%
+  .[, fraction:= V1 / N] %>%
+  ggplot(., aes(Model, fraction, fill = Model)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(breaks = breaks_pretty(n = 3)) +
+  facet_wrap(~variable) +
+  theme_AP() + 
+  theme(legend.position = "top")
+
+
+tmp <- full.dt.close.reading %>%
+  melt(., measure.vars = keywords_selected_stemmed) %>%
+  .[!value == 0] %>%
+  .[, sum(value, na.rm = TRUE), .(total.papers, Model, variable)] %>%
+  .[, fraction:= V1 / total.papers] %>%
+  dcast(., total.papers + Model ~ variable, value.var = "fraction")
+
+tmp[, (names(tmp)) := lapply(.SD, function(x) ifelse(is.na(x), 0, x))]
+
+ggplot(tmp, aes(calibr, valid, label = Model)) +
+  geom_point(color = "grey") +
+  geom_text_repel(size = 2) + 
+  theme_AP() + 
+  theme(legend.position = c(0.9, 0.4))
+
+
+
+
+
+
+
+# Assuming your data.table is named `dt`
+# Get the names of columns where all values are FALSE
+only_false_columns <- names(dt.keywords)[colSums(as.matrix(dt.keywords)) > 0]
+
+# Print the result
+print(only_false_columns)
+
+
+# Print the column names that contain only FALSE values
+print(only_false_columns)
+  
